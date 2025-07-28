@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <title>Chat Room</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/sockjs-client/1.5.1/sockjs.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/stomp.js/2.3.3/stomp.min.js"></script>
+    <style>
+        #chat-messages {
+            height: 300px;
+            overflow-y: auto;
+            border: 1px solid #ccc;
+            padding: 10px;
+            margin-bottom: 10px;
+        }
+        .message {
+            margin-bottom: 5px;
+            padding: 5px 10px;
+            border-radius: 5px;
+            display: inline-block;
+            max-width: 80%;
+        }
+        .my-message {
+            background-color: #dcf8c6;
+            float: right;
+            clear: both;
+        }
+        .other-message {
+            background-color: #f1f0f0;
+            float: left;
+            clear: both;
+        }
+        .event-message {
+            text-align: center;
+            font-style: italic;
+            color: #888;
+        }
+        #user-list {
+            border: 1px solid #ccc;
+            padding: 10px;
+            height: 300px;
+            overflow-y: auto;
+        }
+    </style>
+</head>
+<body>
+    <h1>Chat Room: <span th:text="${chatRoom.name}"></span></h1>
+    <input type="hidden" id="roomId" th:value="${chatRoom.roomId}"/>
+
+    <div>
+        <label for="username">Your Name:</label>
+        <input type="text" id="username" placeholder="Enter your name"/>
+        <button id="connectButton">Connect</button>
+        <button id="disconnectButton" disabled>Disconnect</button>
+    </div>
+
+    <div style="display: flex; margin-top: 20px;">
+        <div style="flex: 2; margin-right: 20px;">
+            <div id="chat-messages"></div>
+            <input type="text" id="messageInput" placeholder="Type your message..." style="width: 100%;"/>
+            <button id="sendMessageButton">Send</button>
+        </div>
+        <div style="flex: 1;">
+            <h3>Connected Users (<span id="user-count">0</span>)</h3>
+            <ul id="user-list"></ul>
+        </div>
+    </div>
+
+    <script>
+        var stompClient = null;
+        var username = null;
+        var roomId = document.getElementById('roomId').value;
+
+        function connect() {
+            username = document.getElementById('username').value.trim();
+            if (username) {
+                document.getElementById('username').disabled = true;
+                document.getElementById('connectButton').disabled = true;
+                document.getElementById('disconnectButton').disabled = false;
+
+                var socket = new SockJS('/ws');
+                stompClient = Stomp.over(socket);
+                stompClient.connect({}, onConnected, onError);
+            } else {
+                alert('Please enter your name.');
+            }
+        }
+
+        function onConnected() {
+            // Public Topic 구독
+            stompClient.subscribe('/topic/public/' + roomId, onMessageReceived);
+
+            // 사용자 입장 메시지 전송
+            stompClient.send("/app/chat.addUser",
+                {},
+                JSON.stringify({roomId: roomId, sender: username, type: 'ENTER'})
+            );
+        }
+
+        function onError(error) {
+            console.error('Could not connect to WebSocket server. Please refresh this page to try again!', error);
+            document.getElementById('username').disabled = false;
+            document.getElementById('connectButton').disabled = false;
+            document.getElementById('disconnectButton').disabled = true;
+        }
+
+        function sendMessage() {
+            var messageInput = document.getElementById('messageInput');
+            var messageContent = messageInput.value.trim();
+
+            if (messageContent && stompClient) {
+                var chatMessage = {
+                    roomId: roomId,
+                    sender: username,
+                    message: messageContent,
+                    type: 'TALK'
+                };
+                stompClient.send("/app/chat.sendMessage", {}, JSON.stringify(chatMessage));
+                messageInput.value = '';
+            }
+        }
+
+        function onMessageReceived(payload) {
+            var message = JSON.parse(payload.body);
+            var chatMessagesDiv = document.getElementById('chat-messages');
+            var userListUl = document.getElementById('user-list');
+            var userCountSpan = document.getElementById('user-count');
+
+            // 사용자 목록 업데이트
+            if (message.users) {
+                userListUl.innerHTML = '';
+                message.users.forEach(user => {
+                    var li = document.createElement('li');
+                    li.textContent = user;
+                    userListUl.appendChild(li);
+                });
+                userCountSpan.textContent = message.userCount;
+            }
+
+            if (message.type === 'ENTER' || message.type === 'LEAVE') {
+                var eventMessageElement = document.createElement('div');
+                eventMessageElement.classList.add('event-message');
+                eventMessageElement.textContent = message.sender + (message.type === 'ENTER' ? ' entered.' : ' left.');
+                chatMessagesDiv.appendChild(eventMessageElement);
+
+            } else if (message.type === 'TALK') {
+                var messageElement = document.createElement('div');
+                messageElement.classList.add('message');
+                if (message.sender === username) {
+                    messageElement.classList.add('my-message');
+                } else {
+                    messageElement.classList.add('other-message');
+                }
+                messageElement.textContent = message.sender + ': ' + message.message;
+                chatMessagesDiv.appendChild(messageElement);
+            }
+            chatMessagesDiv.scrollTop = chatMessagesDiv.scrollHeight;
+        }
+
+        function disconnect() {
+            if (stompClient !== null) {
+                stompClient.send("/app/chat.sendMessage",
+                    {},
+                    JSON.stringify({roomId: roomId, sender: username, type: 'LEAVE'})
+                );
+                stompClient.disconnect();
+            }
+            document.getElementById('username').disabled = false;
+            document.getElementById('connectButton').disabled = false;
+            document.getElementById('disconnectButton').disabled = true;
+            username = null;
+        }
+
+        // 이벤트 리스너 등록
+        document.getElementById('connectButton').addEventListener('click', connect);
+        document.getElementById('sendMessageButton').addEventListener('click', sendMessage);
+        document.getElementById('disconnectButton').addEventListener('click', disconnect);
+
+        // Enter 키로 메시지 전송
+        document.getElementById('messageInput').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                sendMessage();
+            }
+        });
+    </script>
+</body>
+</html>
